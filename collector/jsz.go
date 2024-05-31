@@ -39,6 +39,10 @@ type jszCollector struct {
 	maxMemory  *prometheus.Desc
 	maxStorage *prometheus.Desc
 
+	// Account stats
+	apiReqTotalCount *prometheus.Desc
+	apiReqErrorCount *prometheus.Desc
+
 	// Stream stats
 	streamMessages      *prometheus.Desc
 	streamBytes         *prometheus.Desc
@@ -64,10 +68,13 @@ func isJszEndpoint(system string) bool {
 func newJszCollector(system, endpoint string, servers []*CollectedServer) prometheus.Collector {
 	serverLabels := []string{"server_id", "server_name", "cluster", "domain", "meta_leader", "is_meta_leader"}
 
+	var accountLabels []string
+	accountLabels = append(accountLabels, serverLabels...)
+	accountLabels = append(accountLabels, "account")
+	accountLabels = append(accountLabels, "account_id")
+
 	var streamLabels []string
-	streamLabels = append(streamLabels, serverLabels...)
-	streamLabels = append(streamLabels, "account")
-	streamLabels = append(streamLabels, "account_id")
+	streamLabels = append(streamLabels, accountLabels...)
 	streamLabels = append(streamLabels, "stream_name")
 	streamLabels = append(streamLabels, "stream_leader")
 	streamLabels = append(streamLabels, "is_stream_leader")
@@ -131,6 +138,20 @@ func newJszCollector(system, endpoint string, servers []*CollectedServer) promet
 			prometheus.BuildFQName(system, "server", "max_storage"),
 			"JetStream Max Storage",
 			serverLabels,
+			nil,
+		),
+		// jetstream_account_api_req_total_count
+		apiReqTotalCount: prometheus.NewDesc(
+			prometheus.BuildFQName(system, "account", "api_req_total_count"),
+			"Total number of JetStream API requests",
+			accountLabels,
+			nil,
+		),
+		// jetstream_account_api_req_error_count
+		apiReqErrorCount: prometheus.NewDesc(
+			prometheus.BuildFQName(system, "account", "api_req_error_count"),
+			"Total number of JetStream API request errors",
+			accountLabels,
 			nil,
 		),
 		// jetstream_stream_total_messages
@@ -247,6 +268,10 @@ func (nc *jszCollector) Describe(ch chan<- *prometheus.Desc) {
 	ch <- nc.maxMemory
 	ch <- nc.maxStorage
 
+	// Account state
+	ch <- nc.apiReqTotalCount
+	ch <- nc.apiReqErrorCount
+
 	// Stream state
 	ch <- nc.streamMessages
 	ch <- nc.streamBytes
@@ -330,6 +355,18 @@ func (nc *jszCollector) Collect(ch chan<- prometheus.Metric) {
 		for _, account := range resp.AccountDetails {
 			accountName = account.Name
 			accountID = account.Id
+
+			accountMetric := func(key *prometheus.Desc, value float64) prometheus.Metric {
+				return prometheus.MustNewConstMetric(key, prometheus.GaugeValue, value,
+					// Server Labels
+					serverID, serverName, clusterName, jsDomain, clusterLeader, isMetaLeader,
+					// Account Labels
+					accountName, accountID,
+				)
+			}
+			ch <- accountMetric(nc.apiReqTotalCount, float64(account.API.Total))
+			ch <- accountMetric(nc.apiReqErrorCount, float64(account.API.Errors))
+
 			for _, stream := range account.Streams {
 				streamName = stream.Name
 				if stream.Cluster != nil {
@@ -346,8 +383,11 @@ func (nc *jszCollector) Collect(ch chan<- prometheus.Metric) {
 					return prometheus.MustNewConstMetric(key, prometheus.GaugeValue, value,
 						// Server Labels
 						serverID, serverName, clusterName, jsDomain, clusterLeader, isMetaLeader,
+						// Account Labels
+						accountName, accountID,
 						// Stream Labels
-						accountName, accountID, streamName, streamLeader, isStreamLeader)
+						streamName, streamLeader, isStreamLeader,
+					)
 				}
 				ch <- streamMetric(nc.streamMessages, float64(stream.State.Msgs))
 				ch <- streamMetric(nc.streamBytes, float64(stream.State.Bytes))
@@ -375,8 +415,10 @@ func (nc *jszCollector) Collect(ch chan<- prometheus.Metric) {
 						return prometheus.MustNewConstMetric(key, prometheus.GaugeValue, value,
 							// Server Labels
 							serverID, serverName, clusterName, jsDomain, clusterLeader, isMetaLeader,
+							// Account Labels
+							accountName, accountID,
 							// Stream Labels
-							accountName, accountID, streamName, streamLeader, isStreamLeader,
+							streamName, streamLeader, isStreamLeader,
 							// Consumer Labels
 							consumerName, consumerLeader, isConsumerLeader, consumerDesc,
 						)
